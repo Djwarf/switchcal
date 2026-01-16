@@ -24,17 +24,14 @@ import (
 )
 
 // Google OAuth configuration
-var (
-	googleClientID     = os.Getenv("GOOGLE_CLIENT_ID")
-	googleClientSecret = os.Getenv("GOOGLE_CLIENT_SECRET")
-)
-
 const (
-	googleAuthURL   = "https://accounts.google.com/o/oauth2/v2/auth"
-	googleTokenURL  = "https://oauth2.googleapis.com/token"
-	googleCalDAVURL = "https://apidata.googleusercontent.com/caldav/v2/"
-	googleScope     = "https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email"
-	redirectPort    = 8085
+	googleClientID     = "707683257072-qhapb7fq21cc2too73ovopdobrpigdr9.apps.googleusercontent.com"
+	googleClientSecret = "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"
+	googleAuthURL      = "https://accounts.google.com/o/oauth2/v2/auth"
+	googleTokenURL     = "https://oauth2.googleapis.com/token"
+	googleCalDAVURL    = "https://apidata.googleusercontent.com/caldav/v2/"
+	googleScope        = "https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email"
+	redirectPort       = 8085
 )
 
 // App holds the application state
