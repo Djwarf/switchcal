@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=SwitchCal
+Comment=GTK4 Calendar with Google Calendar sync
+Exec=switchcal
+Icon=office-calendar
+Terminal=false
+Type=Application
+Categories=Office;Calendar;
+Keywords=calendar;google;schedule;
