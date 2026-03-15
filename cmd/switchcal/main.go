@@ -1711,41 +1711,115 @@ func (app *App) syncGoogleCalendarAPI(account *calendar.Account) {
 	})
 }
 
-// fetchGoogleEvents fetches events from a Google calendar using incremental sync when possible
-func (app *App) fetchGoogleEvents(account *calendar.Account, cal *calendar.Calendar) {
-	var eventsURL string
-	incremental := cal.SyncToken != "" && cal.SyncToken != "disabled"
+// googleEventItem represents an event from the Google Calendar API
+type googleEventItem struct {
+	ID          string `json:"id"`
+	Summary     string `json:"summary"`
+	Description string `json:"description"`
+	Location    string `json:"location"`
+	Start       struct {
+		DateTime string `json:"dateTime"`
+		Date     string `json:"date"`
+	} `json:"start"`
+	End struct {
+		DateTime string `json:"dateTime"`
+		Date     string `json:"date"`
+	} `json:"end"`
+	Status string `json:"status"`
+}
 
-	if cal.SyncToken == "disabled" {
-		// This calendar doesn't support incremental sync
-		app.fetchGoogleEventsFull(account, cal)
-		return
-	}
+// googleEventList represents a paginated response from the Google Calendar API
+type googleEventList struct {
+	Items         []googleEventItem `json:"items"`
+	NextPageToken string            `json:"nextPageToken"`
+	NextSyncToken string            `json:"nextSyncToken"`
+}
 
-	if incremental {
-		// Incremental sync: only get changes since last sync
-		eventsURL = fmt.Sprintf("https://www.googleapis.com/calendar/v3/calendars/%s/events?syncToken=%s",
-			url.PathEscape(cal.ID), url.QueryEscape(cal.SyncToken))
-	} else {
-		// Full sync: fetch everything in time window (no singleEvents so we get a reusable sync token)
-		timeMin := time.Now().AddDate(0, -1, 0).Format(time.RFC3339)
-		timeMax := time.Now().AddDate(0, 3, 0).Format(time.RFC3339)
-		eventsURL = fmt.Sprintf("https://www.googleapis.com/calendar/v3/calendars/%s/events?timeMin=%s&timeMax=%s&maxResults=2500",
-			url.PathEscape(cal.ID), url.QueryEscape(timeMin), url.QueryEscape(timeMax))
-	}
-
+// fetchGoogleEventsPage fetches a single page of events and returns the parsed response
+func (app *App) fetchGoogleEventsPage(account *calendar.Account, eventsURL string) (*googleEventList, int, error) {
 	req, _ := http.NewRequest("GET", eventsURL, nil)
 	req.Header.Set("Authorization", "Bearer "+account.AccessToken)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Printf("Failed to fetch events for %s: %v", cal.Name, err)
-		return
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, resp.StatusCode, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	var eventList googleEventList
+	if err := json.NewDecoder(resp.Body).Decode(&eventList); err != nil {
+		return nil, 200, err
+	}
+	return &eventList, 200, nil
+}
+
+// fetchAllGooglePages fetches all pages for a given initial URL
+func (app *App) fetchAllGooglePages(account *calendar.Account, initialURL string) ([]googleEventItem, string, int, error) {
+	var allItems []googleEventItem
+	currentURL := initialURL
+	var syncToken string
+
+	for {
+		result, statusCode, err := app.fetchGoogleEventsPage(account, currentURL)
+		if err != nil {
+			return allItems, "", statusCode, err
+		}
+
+		allItems = append(allItems, result.Items...)
+
+		if result.NextSyncToken != "" {
+			syncToken = result.NextSyncToken
+		}
+
+		if result.NextPageToken == "" {
+			break
+		}
+
+		// Add pageToken to URL for next page
+		if strings.Contains(currentURL, "pageToken=") {
+			// Replace existing pageToken (shouldn't happen, but be safe)
+			break
+		}
+		sep := "&"
+		if !strings.Contains(currentURL, "?") {
+			sep = "?"
+		}
+		currentURL = initialURL + sep + "pageToken=" + url.QueryEscape(result.NextPageToken)
+	}
+
+	return allItems, syncToken, 200, nil
+}
+
+// fetchGoogleEvents fetches events from a Google calendar using incremental sync when possible
+func (app *App) fetchGoogleEvents(account *calendar.Account, cal *calendar.Calendar) {
+	if cal.SyncToken == "disabled" {
+		app.fetchGoogleEventsFull(account, cal)
+		return
+	}
+
+	incremental := cal.SyncToken != ""
+	var eventsURL string
+
+	if incremental {
+		eventsURL = fmt.Sprintf("https://www.googleapis.com/calendar/v3/calendars/%s/events?syncToken=%s&maxResults=2500",
+			url.PathEscape(cal.ID), url.QueryEscape(cal.SyncToken))
+	} else {
+		// Full sync with singleEvents=true to expand recurring events
+		timeMin := time.Now().AddDate(0, -1, 0).Format(time.RFC3339)
+		timeMax := time.Now().AddDate(0, 6, 0).Format(time.RFC3339)
+		eventsURL = fmt.Sprintf("https://www.googleapis.com/calendar/v3/calendars/%s/events?timeMin=%s&timeMax=%s&singleEvents=true&maxResults=2500",
+			url.PathEscape(cal.ID), url.QueryEscape(timeMin), url.QueryEscape(timeMax))
+	}
+
+	allItems, syncToken, statusCode, err := app.fetchAllGooglePages(account, eventsURL)
+
 	// 410 Gone means sync token is invalid — permanently disable incremental sync for this calendar
-	if resp.StatusCode == 410 && incremental {
+	if statusCode == 410 && incremental {
 		log.Printf("Sync token invalid for %s, disabling incremental sync", cal.Name)
 		cal.SyncToken = "disabled"
 		app.store.SaveCalendar(cal)
@@ -1753,46 +1827,21 @@ func (app *App) fetchGoogleEvents(account *calendar.Account, cal *calendar.Calen
 		return
 	}
 
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		log.Printf("Events error %d: %s", resp.StatusCode, string(body))
-		return
-	}
-
-	var eventList struct {
-		Items []struct {
-			ID          string `json:"id"`
-			Summary     string `json:"summary"`
-			Description string `json:"description"`
-			Location    string `json:"location"`
-			Start       struct {
-				DateTime string `json:"dateTime"`
-				Date     string `json:"date"`
-			} `json:"start"`
-			End struct {
-				DateTime string `json:"dateTime"`
-				Date     string `json:"date"`
-			} `json:"end"`
-			Status string `json:"status"`
-		} `json:"items"`
-		NextSyncToken string `json:"nextSyncToken"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&eventList); err != nil {
-		log.Printf("Failed to decode event list for %s: %v", cal.Name, err)
+	if err != nil {
+		log.Printf("Failed to fetch events for %s: %v", cal.Name, err)
 		return
 	}
 
 	if incremental {
-		if len(eventList.Items) > 0 {
-			log.Printf("Incremental sync: %d changes in %s", len(eventList.Items), cal.Name)
+		if len(allItems) > 0 {
+			log.Printf("Incremental sync: %d changes in %s", len(allItems), cal.Name)
 		}
 	} else {
-		log.Printf("Full sync: %d events in %s", len(eventList.Items), cal.Name)
+		log.Printf("Full sync: %d events in %s", len(allItems), cal.Name)
 	}
 
 	var activeIDs []string
-	for _, item := range eventList.Items {
-		// In incremental sync, cancelled means deleted — remove locally
+	for _, item := range allItems {
 		if item.Status == "cancelled" {
 			if incremental {
 				if err := app.store.DeleteEvent(item.ID); err != nil {
@@ -1803,35 +1852,7 @@ func (app *App) fetchGoogleEvents(account *calendar.Account, cal *calendar.Calen
 		}
 
 		activeIDs = append(activeIDs, item.ID)
-
-		event := &calendar.Event{
-			ID:          item.ID,
-			CalendarID:  cal.ID,
-			UID:         item.ID,
-			Title:       item.Summary,
-			Description: item.Description,
-			Location:    item.Location,
-			Status:      calendar.StatusConfirmed,
-		}
-
-		// Parse start time
-		if item.Start.DateTime != "" {
-			event.Start, _ = time.Parse(time.RFC3339, item.Start.DateTime)
-		} else if item.Start.Date != "" {
-			event.Start, _ = time.Parse("2006-01-02", item.Start.Date)
-			event.AllDay = true
-		}
-
-		// Parse end time
-		if item.End.DateTime != "" {
-			event.End, _ = time.Parse(time.RFC3339, item.End.DateTime)
-		} else if item.End.Date != "" {
-			event.End, _ = time.Parse("2006-01-02", item.End.Date)
-		}
-
-		if err := app.store.SaveEvent(event); err != nil {
-			log.Printf("Failed to save event %s: %v", event.Title, err)
-		}
+		app.saveGoogleEvent(cal, &item)
 	}
 
 	// On full sync, remove events that no longer exist remotely
@@ -1844,8 +1865,8 @@ func (app *App) fetchGoogleEvents(account *calendar.Account, cal *calendar.Calen
 	}
 
 	// Save sync token for next incremental sync
-	if eventList.NextSyncToken != "" {
-		cal.SyncToken = eventList.NextSyncToken
+	if syncToken != "" {
+		cal.SyncToken = syncToken
 		app.store.SaveCalendar(cal)
 	}
 }
@@ -1853,88 +1874,59 @@ func (app *App) fetchGoogleEvents(account *calendar.Account, cal *calendar.Calen
 // fetchGoogleEventsFull does a full sync without saving a sync token (for calendars that don't support incremental sync)
 func (app *App) fetchGoogleEventsFull(account *calendar.Account, cal *calendar.Calendar) {
 	timeMin := time.Now().AddDate(0, -1, 0).Format(time.RFC3339)
-	timeMax := time.Now().AddDate(0, 3, 0).Format(time.RFC3339)
+	timeMax := time.Now().AddDate(0, 6, 0).Format(time.RFC3339)
 	eventsURL := fmt.Sprintf("https://www.googleapis.com/calendar/v3/calendars/%s/events?timeMin=%s&timeMax=%s&singleEvents=true&maxResults=2500",
 		url.PathEscape(cal.ID), url.QueryEscape(timeMin), url.QueryEscape(timeMax))
 
-	req, _ := http.NewRequest("GET", eventsURL, nil)
-	req.Header.Set("Authorization", "Bearer "+account.AccessToken)
-
-	resp, err := http.DefaultClient.Do(req)
+	allItems, _, _, err := app.fetchAllGooglePages(account, eventsURL)
 	if err != nil {
 		log.Printf("Failed to fetch events for %s: %v", cal.Name, err)
 		return
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		log.Printf("Events error %d: %s", resp.StatusCode, string(body))
-		return
-	}
-
-	var eventList struct {
-		Items []struct {
-			ID          string `json:"id"`
-			Summary     string `json:"summary"`
-			Description string `json:"description"`
-			Location    string `json:"location"`
-			Start       struct {
-				DateTime string `json:"dateTime"`
-				Date     string `json:"date"`
-			} `json:"start"`
-			End struct {
-				DateTime string `json:"dateTime"`
-				Date     string `json:"date"`
-			} `json:"end"`
-			Status string `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&eventList); err != nil {
-		log.Printf("Failed to decode event list for %s: %v", cal.Name, err)
-		return
-	}
 
 	var activeIDs []string
-	for _, item := range eventList.Items {
+	for _, item := range allItems {
 		if item.Status == "cancelled" {
 			continue
 		}
-
 		activeIDs = append(activeIDs, item.ID)
-
-		event := &calendar.Event{
-			ID:          item.ID,
-			CalendarID:  cal.ID,
-			UID:         item.ID,
-			Title:       item.Summary,
-			Description: item.Description,
-			Location:    item.Location,
-			Status:      calendar.StatusConfirmed,
-		}
-
-		if item.Start.DateTime != "" {
-			event.Start, _ = time.Parse(time.RFC3339, item.Start.DateTime)
-		} else if item.Start.Date != "" {
-			event.Start, _ = time.Parse("2006-01-02", item.Start.Date)
-			event.AllDay = true
-		}
-
-		if item.End.DateTime != "" {
-			event.End, _ = time.Parse(time.RFC3339, item.End.DateTime)
-		} else if item.End.Date != "" {
-			event.End, _ = time.Parse("2006-01-02", item.End.Date)
-		}
-
-		if err := app.store.SaveEvent(event); err != nil {
-			log.Printf("Failed to save event %s: %v", event.Title, err)
-		}
+		app.saveGoogleEvent(cal, &item)
 	}
 
 	if deleted, err := app.store.DeleteEventsNotIn(cal.ID, activeIDs); err != nil {
 		log.Printf("Failed to clean up deleted events for %s: %v", cal.Name, err)
 	} else if deleted > 0 {
 		log.Printf("Removed %d stale events from %s", deleted, cal.Name)
+	}
+}
+
+// saveGoogleEvent parses and saves a single Google Calendar event item
+func (app *App) saveGoogleEvent(cal *calendar.Calendar, item *googleEventItem) {
+	event := &calendar.Event{
+		ID:          item.ID,
+		CalendarID:  cal.ID,
+		UID:         item.ID,
+		Title:       item.Summary,
+		Description: item.Description,
+		Location:    item.Location,
+		Status:      calendar.StatusConfirmed,
+	}
+
+	if item.Start.DateTime != "" {
+		event.Start, _ = time.Parse(time.RFC3339, item.Start.DateTime)
+	} else if item.Start.Date != "" {
+		event.Start, _ = time.Parse("2006-01-02", item.Start.Date)
+		event.AllDay = true
+	}
+
+	if item.End.DateTime != "" {
+		event.End, _ = time.Parse(time.RFC3339, item.End.DateTime)
+	} else if item.End.Date != "" {
+		event.End, _ = time.Parse("2006-01-02", item.End.Date)
+	}
+
+	if err := app.store.SaveEvent(event); err != nil {
+		log.Printf("Failed to save event %s: %v", event.Title, err)
 	}
 }
 
