@@ -1009,6 +1009,14 @@ func (app *App) createEventCard(event *calendar.Event) *gtk.Box {
 
 	card.Append(content)
 
+	// Click to edit/delete
+	click := gtk.NewGestureClick()
+	evtCopy := event
+	click.ConnectReleased(func(nPress int, x, y float64) {
+		app.showEventDialog(evtCopy)
+	})
+	card.AddController(click)
+
 	return card
 }
 
