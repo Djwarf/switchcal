@@ -38,7 +38,7 @@ type Config struct {
 func DefaultConfig() *Config {
 	return &Config{
 		DataDir:              getDefaultDataDir(),
-		SyncIntervalSeconds:  15,
+		SyncIntervalSeconds:  5,
 		SyncOnStartup:        true,
 		Theme:                "system",
 		DefaultView:          "month",

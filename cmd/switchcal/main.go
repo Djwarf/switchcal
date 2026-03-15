@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -1930,6 +1931,105 @@ func (app *App) saveGoogleEvent(cal *calendar.Calendar, item *googleEventItem) {
 	}
 }
 
+// getGoogleAccountForCalendar returns the Google account for a calendar, or nil if it's not a Google calendar
+func (app *App) getGoogleAccountForCalendar(calendarID string) (*calendar.Account, error) {
+	cal, err := app.store.GetCalendar(calendarID)
+	if err != nil {
+		return nil, err
+	}
+	account, err := app.store.GetAccount(cal.AccountID)
+	if err != nil {
+		return nil, err
+	}
+	if account.Type != calendar.AccountTypeGoogle {
+		return nil, nil
+	}
+	return account, nil
+}
+
+// pushGoogleEventCreate creates an event on Google Calendar and returns the Google-assigned ID
+func (app *App) pushGoogleEventCreate(account *calendar.Account, calendarID string, event *calendar.Event) (string, error) {
+	if time.Now().After(account.TokenExpiry) {
+		if err := app.refreshGoogleToken(account); err != nil {
+			return "", fmt.Errorf("token refresh failed: %w", err)
+		}
+	}
+
+	body := map[string]interface{}{
+		"summary":     event.Title,
+		"description": event.Description,
+		"location":    event.Location,
+	}
+	if event.AllDay {
+		body["start"] = map[string]string{"date": event.Start.Format("2006-01-02")}
+		body["end"] = map[string]string{"date": event.End.Format("2006-01-02")}
+	} else {
+		body["start"] = map[string]string{"dateTime": event.Start.Format(time.RFC3339)}
+		body["end"] = map[string]string{"dateTime": event.End.Format(time.RFC3339)}
+	}
+
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return "", err
+	}
+
+	apiURL := fmt.Sprintf("https://www.googleapis.com/calendar/v3/calendars/%s/events",
+		url.PathEscape(calendarID))
+	req, _ := http.NewRequest("POST", apiURL, bytes.NewReader(jsonBody))
+	req.Header.Set("Authorization", "Bearer "+account.AccessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 && resp.StatusCode != 201 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("Google API error %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var result struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+
+	log.Printf("Created event on Google: %s (%s)", event.Title, result.ID)
+	return result.ID, nil
+}
+
+// pushGoogleEventDelete deletes an event from Google Calendar
+func (app *App) pushGoogleEventDelete(account *calendar.Account, calendarID string, eventID string) error {
+	if time.Now().After(account.TokenExpiry) {
+		if err := app.refreshGoogleToken(account); err != nil {
+			return fmt.Errorf("token refresh failed: %w", err)
+		}
+	}
+
+	apiURL := fmt.Sprintf("https://www.googleapis.com/calendar/v3/calendars/%s/events/%s",
+		url.PathEscape(calendarID), url.PathEscape(eventID))
+	req, _ := http.NewRequest("DELETE", apiURL, nil)
+	req.Header.Set("Authorization", "Bearer "+account.AccessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	// 200, 204 = success; 404/410 = already gone
+	if resp.StatusCode != 200 && resp.StatusCode != 204 && resp.StatusCode != 404 && resp.StatusCode != 410 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Google API error %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	log.Printf("Deleted event from Google: %s", eventID)
+	return nil
+}
+
 // openBrowser opens a URL in the default browser
 func openBrowser(url string) error {
 	var cmd *exec.Cmd
@@ -2064,10 +2164,31 @@ func (app *App) showEventDialog(event *calendar.Event) {
 		deleteBtn := gtk.NewButtonWithLabel("Delete")
 		deleteBtn.AddCSSClass("destructive-action")
 		deleteBtn.ConnectClicked(func() {
-			go app.store.DeleteEvent(event.ID)
-			app.refreshMonthView()
-			app.refreshDayDetail()
+			eventID := event.ID
+			calendarID := event.CalendarID
 			dialog.Close()
+
+			go func() {
+				// Only push to Google if this event has a real Google ID (not a temp local ID)
+				if !strings.HasPrefix(eventID, "evt-") {
+					account, err := app.getGoogleAccountForCalendar(calendarID)
+					if err != nil {
+						log.Printf("Error looking up account: %v", err)
+					}
+					if account != nil {
+						if err := app.pushGoogleEventDelete(account, calendarID, eventID); err != nil {
+							log.Printf("Error deleting event from Google: %v", err)
+						}
+					}
+				}
+				if err := app.store.DeleteEvent(eventID); err != nil {
+					log.Printf("Error deleting event locally: %v", err)
+				}
+				glib.IdleAdd(func() {
+					app.refreshMonthView()
+					app.refreshDayDetail()
+				})
+			}()
 		})
 		btnBox.Append(deleteBtn)
 	}
@@ -2115,15 +2236,49 @@ func (app *App) showEventDialog(event *calendar.Event) {
 			event.UID = event.ID
 		}
 
-		// Save
-		if err := app.store.SaveEvent(event); err != nil {
-			log.Printf("Error saving event: %v", err)
-			return
-		}
-
-		app.refreshMonthView()
-		app.refreshDayDetail()
 		dialog.Close()
+
+		go func() {
+			account, err := app.getGoogleAccountForCalendar(event.CalendarID)
+			if err != nil {
+				log.Printf("Error looking up account: %v", err)
+			}
+
+			if account != nil {
+				if isNew {
+					googleID, err := app.pushGoogleEventCreate(account, event.CalendarID, event)
+					if err != nil {
+						log.Printf("Error pushing event to Google: %v", err)
+					} else {
+						event.ID = googleID
+						event.UID = googleID
+					}
+				} else {
+					// Update: delete old + create new on Google
+					oldID := event.ID
+					if err := app.pushGoogleEventDelete(account, event.CalendarID, oldID); err != nil {
+						log.Printf("Error deleting old event from Google: %v", err)
+					}
+					googleID, err := app.pushGoogleEventCreate(account, event.CalendarID, event)
+					if err != nil {
+						log.Printf("Error pushing updated event to Google: %v", err)
+					} else {
+						app.store.DeleteEvent(oldID)
+						event.ID = googleID
+						event.UID = googleID
+					}
+				}
+			}
+
+			if err := app.store.SaveEvent(event); err != nil {
+				log.Printf("Error saving event: %v", err)
+			}
+
+			glib.IdleAdd(func() {
+				app.refreshMonthView()
+				app.refreshDayDetail()
+			})
+		}()
 	})
 	btnBox.Append(saveBtn)
 
