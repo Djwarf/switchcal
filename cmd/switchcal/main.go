@@ -16,12 +16,223 @@ import (
 	"sync"
 	"time"
 
+	"github.com/diamondburned/gotk4/pkg/gdk/v4"
 	"github.com/diamondburned/gotk4/pkg/glib/v2"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 	"github.com/djwarf/switchcal/internal/config"
 	"github.com/djwarf/switchcal/pkg/calendar"
 	"github.com/djwarf/switchcal/pkg/providers/caldav"
 )
+
+// Custom CSS theme for SwitchCal
+const switchcalCSS = `
+/* ── Accent palette ── */
+@define-color sc_accent #7c6ef6;
+@define-color sc_accent_dim alpha(@sc_accent, 0.25);
+@define-color sc_accent_hover alpha(@sc_accent, 0.12);
+@define-color sc_surface alpha(@theme_fg_color, 0.04);
+@define-color sc_surface_hover alpha(@theme_fg_color, 0.08);
+@define-color sc_border alpha(@theme_fg_color, 0.08);
+@define-color sc_muted alpha(@theme_fg_color, 0.45);
+
+/* ── Sidebar ── */
+.sc-sidebar {
+    background: alpha(@theme_bg_color, 0.6);
+    padding: 12px;
+}
+.sc-sidebar-list {
+    background: none;
+    background-color: transparent;
+}
+.sc-sidebar-list > row {
+    background: none;
+    background-color: transparent;
+}
+.sc-sidebar scrolledwindow {
+    background: none;
+    background-color: transparent;
+}
+.sc-sidebar scrolledwindow > viewport {
+    background: none;
+    background-color: transparent;
+}
+.sc-sidebar-title {
+    font-weight: 800;
+    font-size: 11px;
+    letter-spacing: 2px;
+    color: @sc_muted;
+    padding: 4px 4px 8px 4px;
+}
+.sc-add-account {
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-size: 13px;
+}
+.sc-cal-color {
+    border-radius: 50%;
+    min-width: 10px;
+    min-height: 10px;
+}
+.sc-cal-name {
+    font-size: 13px;
+}
+
+/* ── Month header ── */
+.sc-header {
+    padding: 4px 8px;
+}
+.sc-month-label {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+}
+.sc-nav-btn {
+    border-radius: 8px;
+    min-width: 34px;
+    min-height: 34px;
+    padding: 0;
+}
+.sc-today-btn {
+    border-radius: 8px;
+    padding: 4px 16px;
+    font-weight: 600;
+    font-size: 13px;
+}
+.sc-add-event-btn {
+    border-radius: 8px;
+    padding: 4px 14px;
+    font-weight: 600;
+    font-size: 13px;
+    background: @sc_accent;
+    color: white;
+}
+.sc-add-event-btn:hover {
+    background: lighter(@sc_accent);
+}
+.sc-toggle-btn {
+    border-radius: 50%;
+    min-width: 34px;
+    min-height: 34px;
+    padding: 0;
+}
+
+/* ── Day headers ── */
+.sc-day-header {
+    font-size: 11px;
+    font-weight: 700;
+    color: @sc_muted;
+    padding: 8px 0;
+    letter-spacing: 1px;
+}
+
+/* ── Day cells ── */
+.sc-day-cell {
+    border-radius: 8px;
+    background: @sc_surface;
+    transition: background 150ms ease-in-out;
+    padding: 0;
+    min-width: 0;
+    min-height: 0;
+}
+.sc-day-cell:hover {
+    background: @sc_surface_hover;
+}
+.sc-day-cell.sc-selected {
+    background: @sc_accent_dim;
+    border: 1px solid alpha(@sc_accent, 0.4);
+}
+.sc-day-cell.sc-today {
+    border: 2px solid @sc_accent;
+}
+.sc-day-cell.sc-today.sc-selected {
+    border: 2px solid @sc_accent;
+    background: @sc_accent_dim;
+}
+.sc-day-number {
+    font-size: 13px;
+    font-weight: 500;
+    color: @sc_muted;
+}
+.sc-day-number.sc-today {
+    color: @sc_accent;
+    font-weight: 800;
+}
+
+/* ── Event pills in day cells ── */
+.sc-event-pill {
+    border-radius: 3px;
+    padding: 0px 4px;
+    font-size: 9px;
+    margin-top: 1px;
+    font-weight: 500;
+}
+.sc-more-events {
+    font-size: 9px;
+    font-weight: 600;
+    color: @sc_muted;
+    padding: 0px 4px;
+}
+
+/* ── Day detail panel ── */
+.sc-detail {
+    background: alpha(@theme_bg_color, 0.6);
+    padding: 16px;
+}
+.sc-detail-date {
+    font-size: 16px;
+    font-weight: 700;
+    padding-bottom: 8px;
+}
+.sc-no-events {
+    font-size: 13px;
+    color: @sc_muted;
+    padding-top: 24px;
+}
+
+/* ── Event cards ── */
+.sc-event-card {
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-top: 6px;
+    background: @sc_surface;
+    transition: background 150ms ease-in-out;
+}
+.sc-event-card:hover {
+    background: @sc_surface_hover;
+}
+.sc-event-title {
+    font-size: 14px;
+    font-weight: 600;
+}
+.sc-event-time {
+    font-size: 12px;
+    color: @sc_muted;
+    margin-top: 2px;
+}
+.sc-event-location {
+    font-size: 12px;
+    color: @sc_muted;
+    margin-top: 2px;
+}
+.sc-add-event-day {
+    border-radius: 8px;
+    padding: 8px;
+    margin-top: 12px;
+    font-size: 13px;
+}
+
+/* ── Calendar grid spacing ── */
+.sc-grid {
+    margin-top: 8px;
+}
+
+/* ── Color stripe on event cards ── */
+.sc-color-stripe {
+    border-radius: 3px;
+    min-width: 4px;
+    margin-right: 10px;
+}
+`
 
 // Google OAuth configuration
 const (
@@ -67,6 +278,13 @@ type App struct {
 	// Current state
 	currentDate  time.Time
 	selectedDate time.Time
+
+	// Calendar color cache (calendarID → hex color)
+	calendarColors map[string]string
+
+	// Background sync
+	syncTicker *time.Ticker
+	syncDone   chan struct{}
 }
 
 // WaybarOutput is the JSON structure for waybar custom modules
@@ -130,7 +348,7 @@ func runWaybarMode() {
 			if i > 0 {
 				tooltip.WriteString("\n")
 			}
-			eventTime := event.Start.Format("15:04")
+			eventTime := event.Start.Format(cfg.TimeFormat())
 			if event.AllDay {
 				eventTime = "All day"
 			}
@@ -180,13 +398,18 @@ func activate(gtkApp *gtk.Application) {
 		currentDate:      time.Now(),
 		selectedDate:     time.Now(),
 		dayWidgets:       make(map[int]*gtk.Button),
+		calendarColors:   make(map[string]string),
 		sidebarVisible:   false,
 		dayDetailVisible: false,
 	}
 
-	// Close database on app shutdown
+	// Close database and stop background sync on app shutdown
 	gtkApp.ConnectShutdown(func() {
 		log.Printf("App shutting down, closing database...")
+		if app.syncTicker != nil {
+			app.syncTicker.Stop()
+			close(app.syncDone)
+		}
 		store.Close()
 	})
 
@@ -199,6 +422,24 @@ func activate(gtkApp *gtk.Application) {
 
 	// Sync all Google accounts on startup
 	go app.syncAllAccounts()
+
+	// Start periodic background sync
+	if app.config.SyncIntervalSeconds > 0 {
+		interval := time.Duration(app.config.SyncIntervalSeconds) * time.Second
+		app.syncTicker = time.NewTicker(interval)
+		app.syncDone = make(chan struct{})
+		go func() {
+			for {
+				select {
+				case <-app.syncTicker.C:
+					app.syncAllAccounts()
+				case <-app.syncDone:
+					return
+				}
+			}
+		}()
+		log.Printf("Background sync enabled: every %ds", app.config.SyncIntervalSeconds)
+	}
 }
 
 // syncAllAccounts syncs calendars from all configured accounts
@@ -254,9 +495,19 @@ func (app *App) ensureDefaultCalendar() {
 }
 
 func (app *App) buildUI(gtkApp *gtk.Application) {
+	// Load custom CSS
+	cssProvider := gtk.NewCSSProvider()
+	cssProvider.LoadFromString(switchcalCSS)
+	gtk.StyleContextAddProviderForDisplay(
+		gdk.DisplayGetDefault(),
+		cssProvider,
+		gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+	)
+
 	app.window = gtk.NewApplicationWindow(gtkApp)
 	app.window.SetTitle("SwitchCal")
 	app.window.SetDefaultSize(app.config.WindowWidth, app.config.WindowHeight)
+	app.window.SetSizeRequest(420, 350) // Minimum size
 
 	// Main layout - needs to expand to fill window
 	mainBox := gtk.NewBox(gtk.OrientationHorizontal, 0)
@@ -292,7 +543,7 @@ func (app *App) buildUI(gtkApp *gtk.Application) {
 	app.contentPaned.SetShrinkStartChild(true)
 	app.contentPaned.SetShrinkEndChild(true)
 	app.contentPaned.SetWideHandle(true)
-	app.contentPaned.SetPosition(500)
+	app.contentPaned.SetPosition(app.config.WindowWidth * 6 / 10)
 
 	mainBox.Append(app.contentPaned)
 
@@ -305,30 +556,24 @@ func (app *App) buildUI(gtkApp *gtk.Application) {
 
 	app.window.Show()
 
-	// Start with panels closed
-	app.sidebar.SetVisible(false)
-	app.sidebarSep.SetVisible(false)
-	app.dayDetail.SetVisible(false)
-	app.sidebarBtn.SetActive(false)
-	app.detailBtn.SetActive(false)
+	// Set initial layout based on window size
+	app.updateLayoutForWidth()
 }
 
 func (app *App) buildSidebar() *gtk.Box {
-	sidebar := gtk.NewBox(gtk.OrientationVertical, 8)
-	sidebar.SetMarginTop(8)
-	sidebar.SetMarginBottom(8)
-	sidebar.SetMarginStart(8)
-	sidebar.SetMarginEnd(8)
-	sidebar.SetSizeRequest(180, -1)
+	sidebar := gtk.NewBox(gtk.OrientationVertical, 6)
+	sidebar.AddCSSClass("sc-sidebar")
+	sidebar.SetSizeRequest(200, -1)
 
 	// Header
-	header := gtk.NewLabel("Calendars")
-	header.AddCSSClass("title-2")
+	header := gtk.NewLabel("CALENDARS")
+	header.AddCSSClass("sc-sidebar-title")
 	header.SetXAlign(0)
 	sidebar.Append(header)
 
 	// Add account button
 	addBtn := gtk.NewButtonWithLabel("+ Add Account")
+	addBtn.AddCSSClass("sc-add-account")
 	addBtn.ConnectClicked(func() {
 		app.showAddAccountDialog()
 	})
@@ -338,9 +583,11 @@ func (app *App) buildSidebar() *gtk.Box {
 	scrolled := gtk.NewScrolledWindow()
 	scrolled.SetVExpand(true)
 	scrolled.SetPolicy(gtk.PolicyNever, gtk.PolicyAutomatic)
+	scrolled.SetMarginTop(8)
 
 	app.calendarList = gtk.NewListBox()
 	app.calendarList.SetSelectionMode(gtk.SelectionNone)
+	app.calendarList.AddCSSClass("sc-sidebar-list")
 	scrolled.SetChild(app.calendarList)
 	sidebar.Append(scrolled)
 
@@ -353,37 +600,40 @@ func (app *App) buildMonthView() *gtk.Box {
 	view.SetVExpand(true)
 	view.SetMarginTop(8)
 	view.SetMarginBottom(8)
-	view.SetMarginStart(8)
-	view.SetMarginEnd(8)
+	view.SetMarginStart(12)
+	view.SetMarginEnd(12)
 
 	// Header with navigation
-	headerBox := gtk.NewBox(gtk.OrientationHorizontal, 8)
+	headerBox := gtk.NewBox(gtk.OrientationHorizontal, 6)
+	headerBox.AddCSSClass("sc-header")
 
-	// Sidebar toggle button (hamburger menu)
+	// Sidebar toggle button
 	app.sidebarBtn = gtk.NewToggleButton()
 	app.sidebarBtn.SetIconName("open-menu-symbolic")
 	app.sidebarBtn.SetActive(app.sidebarVisible)
 	app.sidebarBtn.SetTooltipText("Toggle sidebar")
-	app.sidebarBtn.AddCSSClass("circular")
-	app.sidebarBtn.SetSizeRequest(40, 40)
+	app.sidebarBtn.AddCSSClass("sc-toggle-btn")
 	app.sidebarBtn.ConnectToggled(func() {
 		app.setSidebarVisible(app.sidebarBtn.Active())
 	})
 	headerBox.Append(app.sidebarBtn)
 
 	prevBtn := gtk.NewButtonFromIconName("go-previous-symbolic")
+	prevBtn.AddCSSClass("sc-nav-btn")
 	prevBtn.ConnectClicked(func() {
 		app.currentDate = app.currentDate.AddDate(0, -1, 0)
 		app.refreshMonthView()
 	})
 
 	nextBtn := gtk.NewButtonFromIconName("go-next-symbolic")
+	nextBtn.AddCSSClass("sc-nav-btn")
 	nextBtn.ConnectClicked(func() {
 		app.currentDate = app.currentDate.AddDate(0, 1, 0)
 		app.refreshMonthView()
 	})
 
 	todayBtn := gtk.NewButtonWithLabel("Today")
+	todayBtn.AddCSSClass("sc-today-btn")
 	todayBtn.ConnectClicked(func() {
 		app.currentDate = time.Now()
 		app.selectedDate = time.Now()
@@ -392,7 +642,7 @@ func (app *App) buildMonthView() *gtk.Box {
 	})
 
 	app.monthLabel = gtk.NewLabel("")
-	app.monthLabel.AddCSSClass("title-1")
+	app.monthLabel.AddCSSClass("sc-month-label")
 	app.monthLabel.SetHExpand(true)
 	app.monthLabel.SetXAlign(0.5)
 
@@ -403,6 +653,7 @@ func (app *App) buildMonthView() *gtk.Box {
 
 	// Add event button
 	addEventBtn := gtk.NewButtonWithLabel("+ Event")
+	addEventBtn.AddCSSClass("sc-add-event-btn")
 	addEventBtn.ConnectClicked(func() {
 		app.showEventDialog(nil)
 	})
@@ -413,8 +664,7 @@ func (app *App) buildMonthView() *gtk.Box {
 	app.detailBtn.SetIconName("view-reveal-symbolic")
 	app.detailBtn.SetActive(app.dayDetailVisible)
 	app.detailBtn.SetTooltipText("Toggle day details")
-	app.detailBtn.AddCSSClass("circular")
-	app.detailBtn.SetSizeRequest(40, 40)
+	app.detailBtn.AddCSSClass("sc-toggle-btn")
 	app.detailBtn.ConnectToggled(func() {
 		app.setDayDetailVisible(app.detailBtn.Active())
 	})
@@ -424,13 +674,13 @@ func (app *App) buildMonthView() *gtk.Box {
 
 	// Calendar grid
 	app.monthView = gtk.NewGrid()
+	app.monthView.AddCSSClass("sc-grid")
 	app.monthView.SetRowHomogeneous(true)
 	app.monthView.SetColumnHomogeneous(true)
-	app.monthView.SetMarginTop(12)
 	app.monthView.SetVExpand(true)
 	app.monthView.SetHExpand(true)
-	app.monthView.SetRowSpacing(2)
-	app.monthView.SetColumnSpacing(2)
+	app.monthView.SetRowSpacing(4)
+	app.monthView.SetColumnSpacing(4)
 
 	view.Append(app.monthView)
 
@@ -438,17 +688,14 @@ func (app *App) buildMonthView() *gtk.Box {
 }
 
 func (app *App) buildDayDetail() *gtk.Box {
-	detail := gtk.NewBox(gtk.OrientationVertical, 8)
-	detail.SetMarginTop(8)
-	detail.SetMarginBottom(8)
-	detail.SetMarginStart(8)
-	detail.SetMarginEnd(8)
+	detail := gtk.NewBox(gtk.OrientationVertical, 4)
+	detail.AddCSSClass("sc-detail")
 	detail.SetHExpand(true)
 	detail.SetVExpand(true)
 
 	// Will be populated by refreshDayDetail
 	placeholder := gtk.NewLabel("Select a day to view events")
-	placeholder.AddCSSClass("dim-label")
+	placeholder.AddCSSClass("sc-no-events")
 	detail.Append(placeholder)
 
 	return detail
@@ -499,10 +746,10 @@ func (app *App) updateMonthViewWithEvents(eventsByDate map[string][]*calendar.Ev
 	app.monthLabel.SetText(app.currentDate.Format("January 2006"))
 
 	// Day headers
-	days := []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
+	days := []string{"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"}
 	for i, day := range days {
 		label := gtk.NewLabel(day)
-		label.AddCSSClass("heading")
+		label.AddCSSClass("sc-day-header")
 		app.monthView.Attach(label, i, 0, 1, 1)
 	}
 
@@ -555,43 +802,59 @@ func (app *App) createDayCell(day int, date time.Time, events []*calendar.Event,
 	btn := gtk.NewButton()
 	btn.SetHExpand(true)
 	btn.SetVExpand(true)
+	btn.AddCSSClass("sc-day-cell")
 
-	box := gtk.NewBox(gtk.OrientationVertical, 2)
-	box.SetMarginTop(4)
-	box.SetMarginBottom(4)
+	if isToday {
+		btn.AddCSSClass("sc-today")
+	}
+	if isSelected {
+		btn.AddCSSClass("sc-selected")
+	}
+
+	box := gtk.NewBox(gtk.OrientationVertical, 1)
+	box.SetMarginTop(2)
+	box.SetMarginBottom(2)
 	box.SetMarginStart(4)
 	box.SetMarginEnd(4)
 
 	// Day number
 	dayLabel := gtk.NewLabel(strconv.Itoa(day))
+	dayLabel.AddCSSClass("sc-day-number")
 	dayLabel.SetXAlign(0)
 	if isToday {
-		dayLabel.AddCSSClass("accent")
+		dayLabel.AddCSSClass("sc-today")
 	}
 	box.Append(dayLabel)
 
-	// Event indicators (show up to 3)
+	// Event pills (show up to 3)
 	for i, event := range events {
 		if i >= 3 {
-			moreLabel := gtk.NewLabel(fmt.Sprintf("+%d more", len(events)-3))
-			moreLabel.AddCSSClass("dim-label")
+			moreLabel := gtk.NewLabel(fmt.Sprintf("+%d", len(events)-3))
+			moreLabel.AddCSSClass("sc-more-events")
 			moreLabel.SetXAlign(0)
 			box.Append(moreLabel)
 			break
 		}
-		eventLabel := gtk.NewLabel(truncate(event.Title, 15))
-		eventLabel.SetXAlign(0)
-		eventLabel.AddCSSClass("caption")
-		box.Append(eventLabel)
+		pill := gtk.NewLabel(truncate(event.Title, 12))
+		pill.SetXAlign(0)
+		pill.SetEllipsize(3) // PANGO_ELLIPSIZE_END
+		pill.AddCSSClass("sc-event-pill")
+
+		// Apply calendar color as inline CSS
+		color := app.calendarColors[event.CalendarID]
+		if color == "" {
+			color = "#7c6ef6"
+		}
+		pillCSS := gtk.NewCSSProvider()
+		pillCSS.LoadFromString(fmt.Sprintf(
+			".sc-event-pill { background: alpha(%s, 0.2); color: %s; }", color, color))
+		pill.StyleContext().AddProvider(pillCSS, gtk.STYLE_PROVIDER_PRIORITY_APPLICATION+1)
+		box.Append(pill)
 	}
 
 	btn.SetChild(box)
 
-	if isSelected {
-		btn.AddCSSClass("suggested-action")
-	}
-
-	// Click handler - efficient selection without full rebuild
+	// Click handler
 	btn.ConnectClicked(func() {
 		app.selectDay(day, date, btn)
 	})
@@ -627,13 +890,13 @@ func (app *App) selectDay(day int, date time.Time, btn *gtk.Button) {
 
 	// Remove selection from old day
 	if app.selectedDayWidget != nil {
-		app.selectedDayWidget.RemoveCSSClass("suggested-action")
+		app.selectedDayWidget.RemoveCSSClass("sc-selected")
 	}
 
 	// Update state and add selection to new day
 	app.selectedDate = date
 	app.selectedDayWidget = btn
-	btn.AddCSSClass("suggested-action")
+	btn.AddCSSClass("sc-selected")
 
 	// Only refresh the day detail panel (async)
 	app.refreshDayDetail()
@@ -674,16 +937,15 @@ func (app *App) updateDayDetailWithEvents(date time.Time, events []*calendar.Eve
 		app.dayDetail.Remove(child)
 	}
 
-	// Header - UK date format
+	// Header
 	dateLabel := gtk.NewLabel(date.Format("Monday, 2 January 2006"))
-	dateLabel.AddCSSClass("title-2")
+	dateLabel.AddCSSClass("sc-detail-date")
 	dateLabel.SetXAlign(0)
 	app.dayDetail.Append(dateLabel)
 
 	if len(events) == 0 {
-		noEvents := gtk.NewLabel("No events")
-		noEvents.AddCSSClass("dim-label")
-		noEvents.SetMarginTop(20)
+		noEvents := gtk.NewLabel("No events scheduled")
+		noEvents.AddCSSClass("sc-no-events")
 		app.dayDetail.Append(noEvents)
 	} else {
 		for _, event := range events {
@@ -692,9 +954,9 @@ func (app *App) updateDayDetailWithEvents(date time.Time, events []*calendar.Eve
 		}
 	}
 
-	// Add event button for this day
+	// Add event button
 	addBtn := gtk.NewButtonWithLabel("+ Add Event")
-	addBtn.SetMarginTop(12)
+	addBtn.AddCSSClass("sc-add-event-day")
 	addBtn.ConnectClicked(func() {
 		app.showEventDialog(nil)
 	})
@@ -702,38 +964,49 @@ func (app *App) updateDayDetailWithEvents(date time.Time, events []*calendar.Eve
 }
 
 func (app *App) createEventCard(event *calendar.Event) *gtk.Box {
-	card := gtk.NewBox(gtk.OrientationVertical, 4)
-	card.AddCSSClass("card")
-	card.SetMarginTop(8)
-	card.SetMarginBottom(4)
-	card.SetMarginStart(4)
-	card.SetMarginEnd(4)
+	// Outer horizontal box: color stripe + content
+	card := gtk.NewBox(gtk.OrientationHorizontal, 0)
+	card.AddCSSClass("sc-event-card")
 
-	// Title
+	// Color stripe
+	color := app.calendarColors[event.CalendarID]
+	if color == "" {
+		color = "#7c6ef6"
+	}
+	stripe := gtk.NewBox(gtk.OrientationVertical, 0)
+	stripe.AddCSSClass("sc-color-stripe")
+	stripeCSS := gtk.NewCSSProvider()
+	stripeCSS.LoadFromString(fmt.Sprintf(".sc-color-stripe { background: %s; }", color))
+	stripe.StyleContext().AddProvider(stripeCSS, gtk.STYLE_PROVIDER_PRIORITY_APPLICATION+1)
+	card.Append(stripe)
+
+	// Content
+	content := gtk.NewBox(gtk.OrientationVertical, 2)
+
 	title := gtk.NewLabel(event.Title)
-	title.AddCSSClass("heading")
+	title.AddCSSClass("sc-event-title")
 	title.SetXAlign(0)
-	card.Append(title)
+	content.Append(title)
 
-	// Time
 	var timeStr string
 	if event.AllDay {
 		timeStr = "All day"
 	} else {
-		timeStr = event.Start.Format("15:04") + " - " + event.End.Format("15:04")
+		timeStr = event.Start.Format(app.config.TimeFormat()) + " — " + event.End.Format(app.config.TimeFormat())
 	}
 	timeLabel := gtk.NewLabel(timeStr)
-	timeLabel.AddCSSClass("caption")
+	timeLabel.AddCSSClass("sc-event-time")
 	timeLabel.SetXAlign(0)
-	card.Append(timeLabel)
+	content.Append(timeLabel)
 
-	// Location if present
 	if event.Location != "" {
-		locLabel := gtk.NewLabel("📍 " + event.Location)
-		locLabel.AddCSSClass("caption")
+		locLabel := gtk.NewLabel(event.Location)
+		locLabel.AddCSSClass("sc-event-location")
 		locLabel.SetXAlign(0)
-		card.Append(locLabel)
+		content.Append(locLabel)
 	}
+
+	card.Append(content)
 
 	return card
 }
@@ -760,9 +1033,17 @@ func (app *App) loadCalendars() {
 		return
 	}
 
+	// Build calendar color cache
+	app.calendarColors = make(map[string]string)
+	for _, cal := range calendars {
+		if cal.Color != "" {
+			app.calendarColors[cal.ID] = cal.Color
+		}
+	}
+
 	if len(calendars) == 0 {
 		label := gtk.NewLabel("No calendars yet")
-		label.AddCSSClass("dim-label")
+		label.AddCSSClass("sc-no-events")
 		label.SetMarginTop(20)
 		app.calendarList.Append(label)
 		return
@@ -809,23 +1090,31 @@ func (app *App) createCalendarRow(cal *calendar.Calendar) *gtk.Box {
 	check.SetActive(cal.Visible)
 	check.ConnectToggled(func() {
 		cal.Visible = check.Active()
-		// Save in background to avoid blocking UI
 		go app.store.SaveCalendar(cal)
-		// Use debounced refresh to handle rapid toggles
 		app.scheduleRefresh()
 	})
 	row.Append(check)
 
-	// Color indicator
-	colorBox := gtk.NewBox(gtk.OrientationVertical, 0)
-	colorBox.SetSizeRequest(12, 12)
-	// Note: would need CSS to set background color
-	row.Append(colorBox)
+	// Color dot
+	colorDot := gtk.NewBox(gtk.OrientationVertical, 0)
+	colorDot.AddCSSClass("sc-cal-color")
+	colorDot.SetSizeRequest(10, 10)
+	colorDot.SetVAlign(gtk.AlignCenter)
+	color := cal.Color
+	if color == "" {
+		color = "#7c6ef6"
+	}
+	dotCSS := gtk.NewCSSProvider()
+	dotCSS.LoadFromString(fmt.Sprintf(".sc-cal-color { background: %s; }", color))
+	colorDot.StyleContext().AddProvider(dotCSS, gtk.STYLE_PROVIDER_PRIORITY_APPLICATION+1)
+	row.Append(colorDot)
 
 	// Name
 	name := gtk.NewLabel(cal.Name)
+	name.AddCSSClass("sc-cal-name")
 	name.SetXAlign(0)
 	name.SetHExpand(true)
+	name.SetEllipsize(3) // PANGO_ELLIPSIZE_END
 	row.Append(name)
 
 	return row
@@ -1301,12 +1590,21 @@ func (app *App) syncCalDAVAccount(account *calendar.Account) {
 
 		log.Printf("Found %d events in %s", len(events), cal.Name)
 
-		// Save events
+		// Save events and track IDs
+		var activeIDs []string
 		for _, event := range events {
 			event.CalendarID = cal.ID
+			activeIDs = append(activeIDs, event.ID)
 			if err := app.store.SaveEvent(event); err != nil {
 				log.Printf("Failed to save event %s: %v", event.Title, err)
 			}
+		}
+
+		// Remove local events that no longer exist on remote
+		if deleted, err := app.store.DeleteEventsNotIn(cal.ID, activeIDs); err != nil {
+			log.Printf("Failed to clean up deleted events for %s: %v", cal.Name, err)
+		} else if deleted > 0 {
+			log.Printf("Removed %d deleted events from %s", deleted, cal.Name)
 		}
 	}
 
@@ -1365,6 +1663,9 @@ func (app *App) syncGoogleCalendarAPI(account *calendar.Account) {
 	log.Printf("Found %d Google calendars", len(calList.Items))
 
 	for _, item := range calList.Items {
+		// Load existing calendar to preserve sync token and visibility
+		existing, _ := app.store.GetCalendar(item.ID)
+
 		cal := &calendar.Calendar{
 			ID:          item.ID,
 			AccountID:   account.ID,
@@ -1373,16 +1674,18 @@ func (app *App) syncGoogleCalendarAPI(account *calendar.Account) {
 			Color:       item.BackgroundColor,
 			Visible:     true,
 		}
+		if existing != nil {
+			cal.SyncToken = existing.SyncToken
+			cal.Visible = existing.Visible
+		}
 		if cal.Color == "" {
 			cal.Color = "#4285f4"
 		}
 
-		log.Printf("Saving calendar: ID=%s, AccountID=%s, Name=%s", cal.ID, cal.AccountID, cal.Name)
 		if err := app.store.SaveCalendar(cal); err != nil {
 			log.Printf("Failed to save calendar %s: %v", cal.Name, err)
 			continue
 		}
-		log.Printf("Calendar saved successfully: %s", cal.Name)
 
 		// Fetch events for this calendar
 		app.fetchGoogleEvents(account, cal)
@@ -1399,13 +1702,150 @@ func (app *App) syncGoogleCalendarAPI(account *calendar.Account) {
 	})
 }
 
-// fetchGoogleEvents fetches events from a Google calendar
+// fetchGoogleEvents fetches events from a Google calendar using incremental sync when possible
 func (app *App) fetchGoogleEvents(account *calendar.Account, cal *calendar.Calendar) {
-	// Time range: 1 month ago to 3 months ahead
+	var eventsURL string
+	incremental := cal.SyncToken != "" && cal.SyncToken != "disabled"
+
+	if cal.SyncToken == "disabled" {
+		// This calendar doesn't support incremental sync
+		app.fetchGoogleEventsFull(account, cal)
+		return
+	}
+
+	if incremental {
+		// Incremental sync: only get changes since last sync
+		eventsURL = fmt.Sprintf("https://www.googleapis.com/calendar/v3/calendars/%s/events?syncToken=%s",
+			url.PathEscape(cal.ID), url.QueryEscape(cal.SyncToken))
+	} else {
+		// Full sync: fetch everything in time window (no singleEvents so we get a reusable sync token)
+		timeMin := time.Now().AddDate(0, -1, 0).Format(time.RFC3339)
+		timeMax := time.Now().AddDate(0, 3, 0).Format(time.RFC3339)
+		eventsURL = fmt.Sprintf("https://www.googleapis.com/calendar/v3/calendars/%s/events?timeMin=%s&timeMax=%s&maxResults=2500",
+			url.PathEscape(cal.ID), url.QueryEscape(timeMin), url.QueryEscape(timeMax))
+	}
+
+	req, _ := http.NewRequest("GET", eventsURL, nil)
+	req.Header.Set("Authorization", "Bearer "+account.AccessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("Failed to fetch events for %s: %v", cal.Name, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	// 410 Gone means sync token is invalid — permanently disable incremental sync for this calendar
+	if resp.StatusCode == 410 && incremental {
+		log.Printf("Sync token invalid for %s, disabling incremental sync", cal.Name)
+		cal.SyncToken = "disabled"
+		app.store.SaveCalendar(cal)
+		app.fetchGoogleEventsFull(account, cal)
+		return
+	}
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		log.Printf("Events error %d: %s", resp.StatusCode, string(body))
+		return
+	}
+
+	var eventList struct {
+		Items []struct {
+			ID          string `json:"id"`
+			Summary     string `json:"summary"`
+			Description string `json:"description"`
+			Location    string `json:"location"`
+			Start       struct {
+				DateTime string `json:"dateTime"`
+				Date     string `json:"date"`
+			} `json:"start"`
+			End struct {
+				DateTime string `json:"dateTime"`
+				Date     string `json:"date"`
+			} `json:"end"`
+			Status string `json:"status"`
+		} `json:"items"`
+		NextSyncToken string `json:"nextSyncToken"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&eventList); err != nil {
+		log.Printf("Failed to decode event list for %s: %v", cal.Name, err)
+		return
+	}
+
+	if incremental {
+		if len(eventList.Items) > 0 {
+			log.Printf("Incremental sync: %d changes in %s", len(eventList.Items), cal.Name)
+		}
+	} else {
+		log.Printf("Full sync: %d events in %s", len(eventList.Items), cal.Name)
+	}
+
+	var activeIDs []string
+	for _, item := range eventList.Items {
+		// In incremental sync, cancelled means deleted — remove locally
+		if item.Status == "cancelled" {
+			if incremental {
+				if err := app.store.DeleteEvent(item.ID); err != nil {
+					log.Printf("Failed to delete cancelled event %s: %v", item.ID, err)
+				}
+			}
+			continue
+		}
+
+		activeIDs = append(activeIDs, item.ID)
+
+		event := &calendar.Event{
+			ID:          item.ID,
+			CalendarID:  cal.ID,
+			UID:         item.ID,
+			Title:       item.Summary,
+			Description: item.Description,
+			Location:    item.Location,
+			Status:      calendar.StatusConfirmed,
+		}
+
+		// Parse start time
+		if item.Start.DateTime != "" {
+			event.Start, _ = time.Parse(time.RFC3339, item.Start.DateTime)
+		} else if item.Start.Date != "" {
+			event.Start, _ = time.Parse("2006-01-02", item.Start.Date)
+			event.AllDay = true
+		}
+
+		// Parse end time
+		if item.End.DateTime != "" {
+			event.End, _ = time.Parse(time.RFC3339, item.End.DateTime)
+		} else if item.End.Date != "" {
+			event.End, _ = time.Parse("2006-01-02", item.End.Date)
+		}
+
+		if err := app.store.SaveEvent(event); err != nil {
+			log.Printf("Failed to save event %s: %v", event.Title, err)
+		}
+	}
+
+	// On full sync, remove events that no longer exist remotely
+	if !incremental {
+		if deleted, err := app.store.DeleteEventsNotIn(cal.ID, activeIDs); err != nil {
+			log.Printf("Failed to clean up deleted events for %s: %v", cal.Name, err)
+		} else if deleted > 0 {
+			log.Printf("Removed %d stale events from %s", deleted, cal.Name)
+		}
+	}
+
+	// Save sync token for next incremental sync
+	if eventList.NextSyncToken != "" {
+		cal.SyncToken = eventList.NextSyncToken
+		app.store.SaveCalendar(cal)
+	}
+}
+
+// fetchGoogleEventsFull does a full sync without saving a sync token (for calendars that don't support incremental sync)
+func (app *App) fetchGoogleEventsFull(account *calendar.Account, cal *calendar.Calendar) {
 	timeMin := time.Now().AddDate(0, -1, 0).Format(time.RFC3339)
 	timeMax := time.Now().AddDate(0, 3, 0).Format(time.RFC3339)
-
-	eventsURL := fmt.Sprintf("https://www.googleapis.com/calendar/v3/calendars/%s/events?timeMin=%s&timeMax=%s&singleEvents=true&maxResults=250",
+	eventsURL := fmt.Sprintf("https://www.googleapis.com/calendar/v3/calendars/%s/events?timeMin=%s&timeMax=%s&singleEvents=true&maxResults=2500",
 		url.PathEscape(cal.ID), url.QueryEscape(timeMin), url.QueryEscape(timeMax))
 
 	req, _ := http.NewRequest("GET", eventsURL, nil)
@@ -1446,12 +1886,13 @@ func (app *App) fetchGoogleEvents(account *calendar.Account, cal *calendar.Calen
 		return
 	}
 
-	log.Printf("Found %d events in %s", len(eventList.Items), cal.Name)
-
+	var activeIDs []string
 	for _, item := range eventList.Items {
 		if item.Status == "cancelled" {
 			continue
 		}
+
+		activeIDs = append(activeIDs, item.ID)
 
 		event := &calendar.Event{
 			ID:          item.ID,
@@ -1463,7 +1904,6 @@ func (app *App) fetchGoogleEvents(account *calendar.Account, cal *calendar.Calen
 			Status:      calendar.StatusConfirmed,
 		}
 
-		// Parse start time
 		if item.Start.DateTime != "" {
 			event.Start, _ = time.Parse(time.RFC3339, item.Start.DateTime)
 		} else if item.Start.Date != "" {
@@ -1471,7 +1911,6 @@ func (app *App) fetchGoogleEvents(account *calendar.Account, cal *calendar.Calen
 			event.AllDay = true
 		}
 
-		// Parse end time
 		if item.End.DateTime != "" {
 			event.End, _ = time.Parse(time.RFC3339, item.End.DateTime)
 		} else if item.End.Date != "" {
@@ -1481,6 +1920,12 @@ func (app *App) fetchGoogleEvents(account *calendar.Account, cal *calendar.Calen
 		if err := app.store.SaveEvent(event); err != nil {
 			log.Printf("Failed to save event %s: %v", event.Title, err)
 		}
+	}
+
+	if deleted, err := app.store.DeleteEventsNotIn(cal.ID, activeIDs); err != nil {
+		log.Printf("Failed to clean up deleted events for %s: %v", cal.Name, err)
+	} else if deleted > 0 {
+		log.Printf("Removed %d stale events from %s", deleted, cal.Name)
 	}
 }
 
@@ -1576,14 +2021,14 @@ func (app *App) showEventDialog(event *calendar.Event) {
 	timeBox := gtk.NewBox(gtk.OrientationHorizontal, 8)
 
 	startEntry := gtk.NewEntry()
-	startEntry.SetText(event.Start.Format("15:04"))
+	startEntry.SetText(event.Start.Format(app.config.TimeFormat()))
 	startEntry.SetWidthChars(8)
 	timeBox.Append(startEntry)
 
 	timeBox.Append(gtk.NewLabel("to"))
 
 	endEntry := gtk.NewEntry()
-	endEntry.SetText(event.End.Format("15:04"))
+	endEntry.SetText(event.End.Format(app.config.TimeFormat()))
 	endEntry.SetWidthChars(8)
 	timeBox.Append(endEntry)
 
@@ -1648,11 +2093,11 @@ func (app *App) showEventDialog(event *calendar.Event) {
 			startStr := startEntry.Text()
 			endStr := endEntry.Text()
 
-			if startTime, err := time.Parse("15:04", startStr); err == nil {
+			if startTime, err := time.Parse(app.config.TimeFormat(), startStr); err == nil {
 				event.Start = time.Date(date.Year(), date.Month(), date.Day(),
 					startTime.Hour(), startTime.Minute(), 0, 0, date.Location())
 			}
-			if endTime, err := time.Parse("15:04", endStr); err == nil {
+			if endTime, err := time.Parse(app.config.TimeFormat(), endStr); err == nil {
 				event.End = time.Date(date.Year(), date.Month(), date.Day(),
 					endTime.Hour(), endTime.Minute(), 0, 0, date.Location())
 			}
@@ -1702,20 +2147,22 @@ func (app *App) updateLayoutForWidth() {
 	}
 
 	if width < 600 {
-		// Small: show ONLY day detail (full screen for events)
+		// Compact: calendar only, no panels
 		app.setSidebarVisible(false)
-		app.setCalendarVisible(false)
-		app.setDayDetailVisible(true)
-	} else if width < 900 {
-		// Medium: show sidebar + calendar, hide day detail
-		app.setSidebarVisible(true)
 		app.setCalendarVisible(true)
 		app.setDayDetailVisible(false)
+	} else if width < 1000 {
+		// Medium: calendar + day detail, no sidebar
+		app.setSidebarVisible(false)
+		app.setCalendarVisible(true)
+		app.setDayDetailVisible(true)
+		app.contentPaned.SetPosition(width * 6 / 10)
 	} else {
-		// Large: show all three panels
+		// Large: all three panels
 		app.setSidebarVisible(true)
 		app.setCalendarVisible(true)
 		app.setDayDetailVisible(true)
+		app.contentPaned.SetPosition((width - 200) * 6 / 10)
 	}
 }
 

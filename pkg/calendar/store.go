@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -358,6 +359,39 @@ func (s *Store) DeleteEvent(id string) error {
 func (s *Store) DeleteEventsByCalendar(calendarID string) error {
 	_, err := s.db.Exec(`DELETE FROM events WHERE calendar_id = ?`, calendarID)
 	return err
+}
+
+// DeleteEventsNotIn deletes events for a calendar that are not in the given ID list.
+// This is used during sync to remove events that were deleted from the remote calendar.
+func (s *Store) DeleteEventsNotIn(calendarID string, keepIDs []string) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(keepIDs) == 0 {
+		// If no events returned, delete all events for this calendar
+		result, err := s.db.Exec(`DELETE FROM events WHERE calendar_id = ?`, calendarID)
+		if err != nil {
+			return 0, err
+		}
+		return result.RowsAffected()
+	}
+
+	// Build placeholders for the IN clause
+	placeholders := make([]string, len(keepIDs))
+	args := make([]interface{}, len(keepIDs)+1)
+	args[0] = calendarID
+	for i, id := range keepIDs {
+		placeholders[i] = "?"
+		args[i+1] = id
+	}
+
+	query := fmt.Sprintf(`DELETE FROM events WHERE calendar_id = ? AND id NOT IN (%s)`,
+		strings.Join(placeholders, ","))
+	result, err := s.db.Exec(query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 // --- Scan helpers ---

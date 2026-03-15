@@ -12,7 +12,7 @@ type Config struct {
 	DataDir string `json:"data_dir"`
 
 	// Sync settings
-	SyncIntervalMinutes int  `json:"sync_interval_minutes"`
+	SyncIntervalSeconds int  `json:"sync_interval_seconds"`
 	SyncOnStartup       bool `json:"sync_on_startup"`
 
 	// UI settings
@@ -20,6 +20,7 @@ type Config struct {
 	DefaultView     string `json:"default_view"` // "month", "week", "day"
 	WeekStartsOn    int    `json:"week_starts_on"` // 0=Sunday, 1=Monday
 	ShowWeekNumbers bool   `json:"show_week_numbers"`
+	Use24HourTime   bool   `json:"use_24h_time"`
 
 	// Notification settings
 	NotificationsEnabled bool `json:"notifications_enabled"`
@@ -37,7 +38,7 @@ type Config struct {
 func DefaultConfig() *Config {
 	return &Config{
 		DataDir:              getDefaultDataDir(),
-		SyncIntervalMinutes:  15,
+		SyncIntervalSeconds:  15,
 		SyncOnStartup:        true,
 		Theme:                "system",
 		DefaultView:          "month",
@@ -92,6 +93,14 @@ func (c *Config) Save() error {
 	}
 
 	return os.WriteFile(configPath, data, 0644)
+}
+
+// TimeFormat returns the Go time format string for displaying times
+func (c *Config) TimeFormat() string {
+	if c.Use24HourTime {
+		return "15:04"
+	}
+	return "3:04 PM"
 }
 
 // DatabasePath returns the path to the SQLite database
